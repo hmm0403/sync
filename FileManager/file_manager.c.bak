@@ -1,0 +1,482 @@
+#include "file_manager.h"
+#include "report.h"
+#include <stdio.h>
+#include <tchar.h>
+#include <string.h>
+
+extern int g_group_id;
+extern int g_initsync_id;
+
+file_list_t *flist_search(file_manager_t *fm, char *src, char *tgt)
+{
+	list_node_t *pos, *nxt;
+	file_list_t *fl;
+
+	/* LOCK */
+	WaitForSingleObject(fm->fm_mutex, INFINITE);
+
+	list_for_each_safe(pos, nxt, &fm->init_list)
+	{
+		fl = list_entry(pos, file_list_t, lnode);
+		if(!strcmp(fl->src_name, src) && !strcmp(fl->correspond_host, tgt)){
+			/* Realease */
+			ReleaseMutex(fm->fm_mutex);
+
+			return fl;
+		}
+	}
+
+	/* Release */
+	ReleaseMutex(fm->fm_mutex);
+
+	return NULL;
+}
+
+int generate_file_list_name(file_list_t* fl)
+{
+	char filename[1024];
+	int len;
+
+	fl->hAFL = INVALID_HANDLE_VALUE;
+	sprintf(filename, "%s\\AFL_%d_%d", INITSYNC_HOME_PATH, g_group_id, g_initsync_id);
+	len = strlen(filename) + 1;
+	fl->all_files = malloc(len);
+	if(!fl->all_files){
+		return -1;
+	}
+	strcpy(fl->all_files, filename);
+
+	DeleteFileA(fl->all_files);
+
+	fl->hMFL = INVALID_HANDLE_VALUE;
+	sprintf(filename, "%s\\MFL_%d_%d", INITSYNC_HOME_PATH, g_group_id, g_initsync_id);
+	len = strlen(filename) + 1;
+	fl->modified_files = malloc(len);
+	if(!fl->modified_files){
+		return -1;
+	}
+	strcpy(fl->modified_files, filename);	
+
+	fl->hSegmentList = INVALID_HANDLE_VALUE;
+	sprintf(filename, "%s\\segment_%d_%d", INITSYNC_HOME_PATH, g_group_id, g_initsync_id);
+	len = strlen(filename) + 1;
+	fl->segment_files = malloc(len);
+	if(!fl->segment_files){
+		return -1;
+	}
+	strcpy(fl->segment_files, filename);	
+
+	fl->hHistory = INVALID_HANDLE_VALUE;
+	sprintf(filename, "%s\\history_%d_%d", INITSYNC_HOME_PATH, g_group_id, g_initsync_id);
+	len = strlen(filename) + 1;
+	fl->history = malloc(len);
+	if(!fl->history){
+		return -1;
+	}
+	strcpy(fl->history, filename);
+
+	fl->hSyncFail = INVALID_HANDLE_VALUE;
+	sprintf(filename, "%s\\sync_fail_%d_%d", INITSYNC_HOME_PATH, g_group_id, g_initsync_id);
+	len = strlen(filename) + 1;
+	fl->sync_fail = malloc(len);
+	if(!fl->history){
+		return -1;
+	}
+	strcpy(fl->sync_fail, filename);
+
+	return 0;
+}
+
+file_manager_t *init_file_manager(void *node)
+{
+	file_manager_t *fm;
+
+	fm = malloc(sizeof(file_manager_t));
+	if (!fm){
+		LOG_ERROR(LOG_MOD_FILE, "out of memory %s:%d", __FILE__, __LINE__);
+		return NULL;
+	}
+
+	memset(fm, 0,sizeof(file_manager_t));
+
+	fm->node = node;
+
+	/* file list init */
+	init_list_node(&fm->init_list);
+	init_list_node(&fm->run_list);
+
+	/* mutex init */
+	fm->fm_mutex = CreateMutex(NULL, FALSE, NULL);
+	if(!fm->fm_mutex)
+	{
+		LOG_ERROR(LOG_MOD_FILE, "CreateMutex Fail %s:%d", __FILE__, __LINE__);
+		goto out_error;
+	}
+	
+	return fm;
+
+out_error:
+	destroy_file_manager(fm);
+	return NULL;
+}
+
+int destroy_file_list(file_list_t *fl)
+{
+	dir_t *d;
+	PSEG_T seg;
+	list_node_t *pos, *next;
+	int ret, written;
+
+	if(fl){
+		/* dir list */
+		if(!list_empty(&fl->dir_list)){
+			list_for_each_safe(pos, next, &fl->dir_list) {
+				d = list_entry(pos, dir_t, lnode);
+				SAFE_FREE(d->name);
+				list_del(&d->lnode);
+				SAFE_FREE(d);
+				fl->nr_dir--;
+			}		
+		}
+
+		SAFE_FREE(fl->src_name);
+		SAFE_FREE(fl->correspond_host);
+		SAFE_FREE(fl->remote);
+		
+		SAFE_CLOSE_HANDLE(fl->hAFL);
+		SAFE_CLOSE_HANDLE(fl->hMFL);
+		SAFE_CLOSE_HANDLE(fl->hHistory);
+
+		if(fl->file_entry){
+			SAFE_FREE(fl->file_entry);
+		}
+
+		if(!list_empty(&fl->segment_list)){
+			list_for_each_safe(pos, next, &fl->segment_list) {
+				seg = list_entry(pos, SEG_T, lnode);
+				list_del(&seg->lnode);
+				SAFE_FREE(seg);
+			}		
+		}
+#if 0
+		else{
+			DeleteFileA(fl->modified_files);
+			DeleteFileA(fl->history);
+		}
+
+		/* delete another files */
+		DeleteFileA(fl->all_files);
+#endif
+		SAFE_FREE(fl);
+	}
+
+	return 0;
+}
+
+int destroy_file_manager(file_manager_t *fm)
+{
+	file_list_t *fl;
+	list_node_t *pos, *next;
+
+	LOG_INFO(LOG_MOD_MAIN, "+- Destoroy File Manager -+");
+	if(fm){
+
+		/* Lock */
+		WaitForSingleObject(fm->fm_mutex, INFINITE);
+
+		/* init list */
+		if(!list_empty(&fm->init_list)){
+			list_for_each_safe(pos, next, &fm->init_list) {
+				fl = list_entry(pos, file_list_t, lnode);
+				destroy_file_list(fl);
+				fm->nr_init--;
+			}		
+		}
+
+		/* run list */
+		if(!list_empty(&fm->run_list)){
+			list_for_each_safe(pos, next, &fm->run_list) {
+				fl = list_entry(pos, file_list_t, lnode);
+				destroy_file_list(fl);
+				fm->nr_run--;
+			}		
+		}
+
+		/* Release */
+		ReleaseMutex(fm->fm_mutex);
+
+		SAFE_CLOSE_HANDLE(fm->fm_mutex);
+
+		SAFE_FREE(fm);
+	}
+
+	return 0;
+}
+
+int pathDepthCheck( TCHAR *pr_path, int pr_len )
+{
+	int  i     = 0;
+	int  depth = 0;
+
+
+	for( i = 0; i < pr_len; i++ )
+	{
+		if( pr_path[i] == _T('\\') )
+			depth++;
+	}
+
+	return depth;
+}
+
+int add_file_list(file_manager_t *fm, TCHAR *name, char *src, char *dst)
+{
+	file_list_t *fl;
+	dir_t *dir, *tmp;
+	list_node_t *pos, *nxt;
+	int ret;
+
+	if(name[_tcslen(name)-1] == _T('\\') || name[_tcslen(name)-1] == _T('/'))
+		name[_tcslen(name)-1] = 0;
+
+	fl = flist_search(fm, src, dst);
+	if(fl){
+		int added = 0;
+
+		dir = malloc(sizeof(dir_t));
+		if(!dir){
+			LOG_ERROR(LOG_MOD_FILE, "out of memory %s:%d", __FILE__, __LINE__);
+			return -1;
+		}
+
+		dir->name = (TCHAR *)malloc(sizeof(TCHAR) * (_tcslen(name) + 1));
+		if(!dir->name){
+			LOG_ERROR(LOG_MOD_FILE, "out of memory %s:%d", __FILE__, __LINE__);
+			SAFE_FREE(dir);
+			return -1;
+		}
+		ret = _tcsncpy_s(dir->name, _tcslen(name) + 1, name, _TRUNCATE);
+		if(ret != 0){
+			LOG_ERROR(LOG_MOD_FILE, "strcpy %s:%d", __FILE__, __LINE__);
+			SAFE_FREE(dir->name);
+			SAFE_FREE(dir);
+			return -1;
+		}
+
+		dir->length = _tcslen(name);
+		dir->depth = pathDepthCheck(name, dir->length);
+
+		list_for_each_safe(pos, nxt, &fl->dir_list){
+			tmp = list_entry(pos, dir_t, lnode);
+
+			ret = str_dep_cmp(dir->name, tmp->name);
+			if(ret < 0){
+				added = 1;
+				list_add_prev(&dir->lnode, &tmp->lnode);
+				break;
+			}
+		}
+		if(!added)
+			list_add_tail(&dir->lnode, &fl->dir_list);
+
+		fl->nr_dir++;
+	}else{
+		fl = malloc(sizeof(file_list_t));
+		if(!fl){
+			LOG_ERROR(LOG_MOD_FILE, "out of memory %s:%d", __FILE__, __LINE__);
+			return -1;
+		}
+
+		memset (fl, 0, sizeof(file_list_t));
+
+		init_list_node(&fl->dir_list);
+
+		dir = malloc(sizeof(dir_t));
+		if(!dir){
+			LOG_ERROR(LOG_MOD_FILE, "out of memory %s:%d", __FILE__, __LINE__);
+			SAFE_FREE(fl);
+			return -1;
+		}
+
+		dir->name = (TCHAR *)malloc(sizeof(TCHAR) * (_tcslen(name) + 1));
+		if(!dir->name){
+			LOG_ERROR(LOG_MOD_FILE, "out of memory %s:%d", __FILE__, __LINE__);
+			SAFE_FREE(dir);
+			SAFE_FREE(fl);
+			return -1;
+		}
+		ret = _tcsncpy_s(dir->name, _tcslen(name) + 1, name, _TRUNCATE);
+		if(ret != 0){
+			LOG_ERROR(LOG_MOD_FILE, "strcpy %s:%d", __FILE__, __LINE__);
+			SAFE_FREE(dir->name);
+			SAFE_FREE(dir);
+			return -1;
+		}
+
+		dir->length = _tcslen(name);
+		dir->depth = pathDepthCheck(name, dir->length);
+
+		list_add_tail(&dir->lnode, &fl->dir_list);
+		fl->nr_dir++;
+
+		fl->src_name = malloc(strlen(src) + 1);
+		if(!fl->src_name){
+			LOG_ERROR(LOG_MOD_FILE, "out of memory %s:%d", __FILE__, __LINE__);
+			SAFE_FREE(dir->name);
+			SAFE_FREE(dir);
+			SAFE_FREE(fl);
+			return -1;
+		}
+
+		ret = strncpy_s(fl->src_name, strlen(src) + 1, src, _TRUNCATE);
+		if(ret != 0){
+			LOG_ERROR(LOG_MOD_FILE, "strcpy fail %s:%d", __FILE__, __LINE__);
+			SAFE_FREE(dir->name);
+			SAFE_FREE(dir);
+			SAFE_FREE(fl->src_name);
+			SAFE_FREE(fl);
+			return -1;
+		}
+
+		fl->correspond_host = malloc(strlen(dst) + 1);
+		if(!fl->correspond_host){
+			LOG_ERROR(LOG_MOD_FILE, "out of memory %s:%d", __FILE__, __LINE__);
+			SAFE_FREE(dir->name);
+			SAFE_FREE(dir);
+			SAFE_FREE(fl->src_name);
+			SAFE_FREE(fl);
+			return -1;
+		}
+
+		ret = strncpy_s(fl->correspond_host, strlen(dst) + 1, dst, _TRUNCATE);
+		if(ret != 0){
+			LOG_ERROR(LOG_MOD_FILE, "strcpy fail %s:%d", __FILE__, __LINE__);
+			SAFE_FREE(dir->name);
+			SAFE_FREE(dir);
+			SAFE_FREE(fl->src_name);
+			SAFE_FREE(fl->correspond_host);
+			SAFE_FREE(fl);
+			return -1;
+		}
+
+		init_list_node(&fl->segment_list);
+
+		/* Lock */
+		WaitForSingleObject(fm->fm_mutex, INFINITE);
+
+		list_add_tail(&fl->lnode, &fm->init_list);
+		fl->state = FILE_LIST_STATE_INIT;
+		++fm->nr_init;
+		++fm->nr_total;
+		/* Release */
+		ReleaseMutex(fm->fm_mutex);
+	}
+
+	return 0;
+}
+
+int flist_regist_local_dir(file_manager_t *fm, char *src, TCHAR *local_dir)
+{
+	if(local_dir[_tcslen(local_dir)-1] == _T('\\') || local_dir[_tcslen(local_dir)-1] == _T('/'))
+		local_dir[_tcslen(local_dir)-1] = 0;
+
+	fm->local_rep_dir = local_dir;
+	
+	return 0;
+}
+
+int delete_file_list(file_manager_t *fm, file_list_t *fl)
+{
+}
+
+file_list_t *flist_alloc(file_manager_t *fm, char *src, char *tgt)
+{
+	list_node_t *pos, *nxt;
+	file_list_t *fl;
+	
+	fl = flist_search(fm, src, tgt);
+	if(!fl){
+		LOG_ERROR(LOG_MOD_FILE, "out of free file list");
+		return NULL;
+	}
+
+	if(!_tcscmp(src, tgt) && fm->local_rep_dir){
+		fl->local_rep_dir = malloc((_tcslen(fm->local_rep_dir) + 1) * sizeof(TCHAR));
+		_tcscpy(fl->local_rep_dir, fm->local_rep_dir);
+	}
+
+	/* Lock */
+	WaitForSingleObject(fm->fm_mutex, INFINITE);
+
+	list_move_tail(&fl->lnode, &fm->run_list);
+	--fm->nr_init;
+	++fm->nr_run;
+	fl->state = FILE_LIST_STATE_RUN;
+	fl->fm = fm;
+	
+	/* Release */
+	ReleaseMutex(fm->fm_mutex);
+
+	/* generate file name */
+	generate_file_list_name(fl);
+
+	return fl;
+}
+
+int flist_duplicate(file_manager_t *fm, file_list_t *fl)
+{
+	list_node_t *pos, *nxt;
+	dir_t *dir;
+
+	list_for_each_safe(pos, nxt, &fl->dir_list)
+	{
+		dir = list_entry(pos, dir_t, lnode);
+		add_file_list(fm, dir->name, fl->src_name, fl->correspond_host);
+	}
+
+	return 0;
+}
+
+int flist_dealloc(file_manager_t *fm, file_list_t *fl, int delete_flag)
+{
+	DeleteFileA(fl->all_files);
+
+	if(delete_flag){
+		DeleteFileA(fl->modified_files);
+		DeleteFileA(fl->history);
+	}
+
+	SAFE_FREE(fl->all_files);
+	SAFE_FREE(fl->modified_files);
+	SAFE_FREE(fl->history);
+	SAFE_FREE(fl->sync_fail);
+	
+	SAFE_CLOSE_HANDLE(fl->hAFL);
+	SAFE_CLOSE_HANDLE(fl->hHistory);
+	SAFE_CLOSE_HANDLE(fl->hMFL);
+	SAFE_CLOSE_HANDLE(fl->hSyncFail);
+	
+	fl->state = FILE_LIST_STATE_INIT;
+	
+	SAFE_FREE(fl->remote);
+	fl->nr_afl = 0;
+	fl->afl_idx = 0;
+	fl->afl_complete = 0;
+
+	SAFE_FREE(fl->file_entry);
+	fl->nr_file_entry = 0;
+	fl->idx_file_entry = 0;
+	fl->file_entry_offset = 0;
+	fl->file_entry_complete = 0;
+
+	/* Lock */
+	WaitForSingleObject(fm->fm_mutex, INFINITE);
+
+	list_move_tail(&fl->lnode, &fm->init_list);
+	fm->nr_init++;
+	fm->nr_run--;
+	
+	/* Release */
+	ReleaseMutex(fm->fm_mutex);
+
+	return 0;
+}

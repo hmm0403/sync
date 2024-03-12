@@ -1,0 +1,292 @@
+#include <winsock2.h>
+#include <string.h>
+#include "type_defines.h"
+
+int init_network_api(void)
+{
+	int ret;
+	WSADATA wsa_data;
+	ret = WSAStartup(MAKEWORD(2,2), &wsa_data);
+	if (ret)
+		return -1;
+	return 0;
+}
+
+int destroy_network_api(void)
+{
+	int ret;
+	ret = WSACleanup();
+	if (ret == SOCKET_ERROR)
+		return -1;
+	return 0;
+}
+
+SOCKET net_tcp_socket(void)
+{
+	SOCKET sock;
+	sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	return sock;
+}
+
+SOCKET net_udp_socket(void)
+{
+	SOCKET sock;
+	sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	return sock;
+}
+
+int net_closesocket(SOCKET sock)
+{
+	int ret;
+	shutdown(sock, SD_BOTH);
+	ret = closesocket(sock);
+	return ret;
+}
+
+int net_bind(SOCKET sock, char *addr, uint16 port)
+{
+	struct sockaddr_in sa;
+	int ret;
+
+	if (port < 0)
+		return SOCKET_ERROR;
+
+	memset(&sa, 0, sizeof(struct sockaddr_in));
+	sa.sin_family = AF_INET;
+	sa.sin_port = htons(port);
+	if (addr == NULL)
+		sa.sin_addr.s_addr = htonl(INADDR_ANY);
+	else
+		sa.sin_addr.s_addr = inet_addr(addr);
+
+	ret = bind(sock, (struct sockaddr *)&sa, sizeof(struct sockaddr));
+	return ret;
+}
+
+int net_listen(SOCKET sock)
+{
+	int ret;
+
+	ret = listen(sock, SOMAXCONN);
+	return ret;
+}
+
+SOCKET net_accept(SOCKET sock, struct sockaddr_in *cliaddr)
+{
+	SOCKET csock;
+	struct sockaddr_in sa;
+	int addrlen;
+
+	addrlen = sizeof(struct sockaddr_in);
+	if (cliaddr == NULL) 
+		csock = accept(sock, (struct sockaddr *)&sa, &addrlen);
+	else
+		csock = accept(sock, (struct sockaddr *)cliaddr, &addrlen);
+	return csock;
+}
+
+int net_connect(SOCKET sock, char *addr, uint16 port)
+{
+	int ret;
+	struct sockaddr_in sa;
+
+	if (!addr)
+		return -1;
+
+	memset(&sa, 0, sizeof(struct sockaddr_in));
+	sa.sin_family = AF_INET;
+	sa.sin_port = htons(port);
+	sa.sin_addr.s_addr = inet_addr(addr);
+	ret = connect(sock, (struct sockaddr *)&sa, sizeof(struct sockaddr));
+	return ret;
+}
+
+int net_send(SOCKET s, const void *buf, size_t len)
+{
+	int ret;
+
+	ret = send(s, buf, (int)len, 0);
+	return ret;
+}
+
+int net_recv(SOCKET s, void *buf, size_t len)
+{
+	int ret;
+
+	ret = recv(s, buf, (int)len, 0);
+	return ret;
+}
+
+/* use "sa" or "addr", exclusively */
+int net_sendto(SOCKET s, const void *buf, size_t len, struct sockaddr_in *sa, char *addr, uint16 port) 
+{
+	int ret;
+	struct sockaddr_in to;
+
+	if (addr == NULL) {
+		sa->sin_port = htons(port);
+	} else {
+		memset(&to, 0, sizeof(struct sockaddr_in));
+		to.sin_family = AF_INET;
+		to.sin_port = htons(port);
+		to.sin_addr.s_addr = inet_addr(addr);
+	}
+
+	if (addr == NULL)
+		ret = sendto(s, buf, (int)len, 0, (struct sockaddr *)sa, sizeof(struct sockaddr));
+	else
+		ret = sendto(s, buf, (int)len, 0, (struct sockaddr *)&to, sizeof(struct sockaddr));
+	return ret;
+}
+
+int net_recvfrom(SOCKET s, void *buf, size_t len)
+{
+	int ret;
+	int fromlen = sizeof(struct sockaddr);
+	struct sockaddr_in from;
+	
+	ret = recvfrom(s, buf, (int)len, 0, (struct sockaddr *)&from, &fromlen);
+	return ret;
+}
+
+int net_getsockopt(SOCKET s, int level, int optname, char *optval, int *optlen)
+{
+	return getsockopt(s, level, optname, optval, optlen);
+}
+
+int net_setsockopt(SOCKET s, int level, int optname, const char *optval, int optlen)
+{
+	return setsockopt(s, level, optname, optval, optlen);
+}
+
+int net_set_reuseaddr(SOCKET sock)
+{
+	int ret;
+	BOOL optval = 1;
+
+	ret = setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char *)&optval, (int)sizeof(optval));
+	if (!ret) 
+		return 0;
+	return -1;
+}
+
+int net_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, int timeout)
+{
+	int ret;
+	struct timeval tv;
+
+	if (timeout >= 0) {
+		tv.tv_sec = 0;
+		tv.tv_usec = timeout * 1000;
+		ret = select(nfds, readfds, writefds, exceptfds, &tv);
+	} else {
+		ret = select(nfds, readfds, writefds, exceptfds, NULL);
+	}
+
+	return ret;
+}
+
+int net_set_nonblock(SOCKET sock)
+{
+	int ret;
+	u_long argp;
+
+	argp = 1;
+	ret = ioctlsocket(sock, FIONBIO, &argp);
+	if (ret == SOCKET_ERROR) {
+		return -1;
+	}
+
+	return 0;
+}
+
+int net_set_block(SOCKET sock)
+{
+	int ret;
+	u_long argp;
+
+	argp = 0;
+	ret = ioctlsocket(sock, FIONBIO, &argp);
+	if (ret == SOCKET_ERROR) {
+		return -1;
+	}
+
+	return 0;
+}
+
+int net_get_sendbuf_size(SOCKET sock, int *size)
+{
+	int ret;
+	int optlen;
+
+	optlen = sizeof(int);
+
+	ret = getsockopt(sock, SOL_SOCKET, SO_SNDBUF, (char *)size, &optlen);
+	if (ret < 0) {
+		return -1;
+	}
+	return 0;
+}
+
+int net_set_sendbuf_size(SOCKET sock, int size)
+{
+	int ret;
+
+	ret = setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (char *)&size, (int)sizeof(size));
+	if (ret < 0) {
+		return -1;
+	}
+	return 0;
+}
+
+int net_get_recvbuf_size(SOCKET sock, int *size)
+{
+	int ret;
+	int optlen;
+
+	optlen = sizeof(int);
+
+	ret = getsockopt(sock, SOL_SOCKET, SO_RCVBUF, (char *)size, &optlen);
+	if (ret < 0) {
+		return -1;
+	}
+	return 0;
+}
+int net_set_recvbuf_size(SOCKET sock, int size)
+{
+	int ret;
+
+	ret = setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (char *)&size, (int)sizeof(size));
+	if (ret < 0) {
+		return -1;
+	}
+	return 0;
+}
+
+int net_set_keepalive(SOCKET s)
+{
+	int ret;
+	int opt;
+
+	opt = 1;
+	ret = setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, (char *)&opt, (int)sizeof(opt));
+	if (ret < 0) {
+		return -1;
+	}
+	return 0;
+}
+
+void net_get_peer_ip(SOCKET s, char *ip)
+{
+    SOCKADDR_IN sock_addr;
+    char* p;
+    int soklen;
+    
+    soklen = sizeof(sock_addr);
+ 
+    getpeername(s,(struct sockaddr*)&sock_addr,&soklen);
+ 
+    p = (char*)inet_ntoa(sock_addr.sin_addr);
+    strcpy(ip,p);
+}
+

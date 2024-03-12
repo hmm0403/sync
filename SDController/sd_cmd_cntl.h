@@ -1,0 +1,53 @@
+#ifndef __SDCONTROLLER_SD_CMD_CNTL_H_
+#define __SDCONTROLLER_SD_CMD_CNTL_H_
+
+
+#include "crt_dbg.h"
+#include "extern_c.h"
+#include "type_defines.h"
+#include "node.h"
+#include "sizeof.h"
+
+typedef enum {
+	SD_CMD_IS_RUNNING = POW_2_0,
+	SD_CMD_PAUSE_IMMEDIATE = POW_2_1,
+	SD_CMD_PAUSE_TRANSACTION = POW_2_2,
+	SD_CMD_RESUME = POW_2_3,
+	SD_CMD_STOP_ALONE = POW_2_4,
+	SD_CMD_STOP_WITH_MDP = POW_2_5
+} sd_cmd_t;
+
+#define SD_CMD_PAUSE (SD_CMD_PAUSE_IMMEDIATE | SD_CMD_PAUSE_TRANSACTION)
+#define SD_CMD_STOP (SD_CMD_STOP_ALONE | SD_CMD_STOP_WITH_MDP)
+
+typedef enum {
+	SD_CMD_SUCCESS,
+	SD_CMD_FAIL
+}sd_cmd_rspns_t;
+
+typedef struct sd_cmd_msg_t{
+	int group_index;
+	sd_cmd_t cmd;
+}sd_cmd_msg_t;
+
+typedef struct sd_rspns_msg_t{
+	int group_index;
+	sd_cmd_rspns_t result;
+	long return_info;
+	long pad;
+}sd_rspns_msg_t;
+
+typedef struct sd_cmd_cntl_t{
+	sd_cmd_msg_t cmd;
+
+	sd_rspns_msg_t response;
+
+	void *node;
+} sd_cmd_cntl_t;
+
+sd_cmd_cntl_t *init_sd_cmd_cntl(node_t *node);
+void sd_cmd_handler(void *dis, SOCKET sock, void *data, int err);
+void sd_response_handler(void *dis, SOCKET sock, void *data, int err);
+sd_cmd_rspns_t initsyncCmd(int index, char *remoteip, int port, sd_cmd_t cmd, int *return_info);
+
+#endif

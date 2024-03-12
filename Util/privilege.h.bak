@@ -1,0 +1,78 @@
+/*****************************************************************
+*  Copyright(C) 2000.      All right reserved.                  *
+*  MacroImpact                                                  *
+*  SANique Design and Development Team                          *
+*  System Software Labs                                         *
+*****************************************************************/
+
+/*****************************************************************
+* HEADER FILE 
+*    fd_list.h - file descriptor list
+*
+* DESCRIPTION
+*    This file implements a list to store file descriptors which
+*	  a process maintains 
+*
+* NOTES
+*	  None
+*****************************************************************/
+
+/*****************************************************************
+* REVISION HISTORY
+* DATE         Authors          Description
+* ===============================================================
+*****************************************************************/
+
+#pragma once
+
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/*****************************************************************
+* NESTED INCLUDE FILES.
+*****************************************************************/
+#include <windows.h>
+//#include <stdio.h>
+
+/*****************************************************************
+* DEFINED CONSTANTS.
+*****************************************************************/
+#define RTN_OK		(0)
+#define RTN_USAGE	(1)
+#define RTN_ERROR	(13)
+
+#define MAX_NAME_LEN 64
+
+/*****************************************************************
+* MACRO DEFINITIONS..
+*****************************************************************/
+
+
+/*****************************************************************
+* TYPEDEFS.
+*****************************************************************/
+
+/*****************************************************************
+* GLOBAL FUNCTION PROTOTYPES.
+*****************************************************************/
+
+BOOL AddPriviliges();
+
+HANDLE CreatePublicFileMapping(char *key, int size);
+
+HANDLE CreatePublicMutex(char *key);
+
+HANDLE CreatePublicEvent(char *key);
+
+void *MakeSetSecuInfo(TCHAR* path, int *len, SECURITY_INFORMATION *secu_info, int *err);
+int SetSecurity(TCHAR* path, void* pmsg, int len, SECURITY_INFORMATION secu_info);
+DWORD SetSecurityAll(TCHAR *path);
+/*****************************************************************
+* GLOBAL DATA DECLARATIONS.
+*****************************************************************/
+
+#ifdef __cplusplus
+}
+#endif
